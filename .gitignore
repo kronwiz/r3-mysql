@@ -1,3 +1,6 @@
+# Generated sources
+mysqldb_init.h
+
 # Object files
 *.o
 *.ko
