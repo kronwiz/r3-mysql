@@ -10,8 +10,11 @@ create table addressbook (
 	address varchar( 255 ),
 	city varchar( 255 ),
 	zip varchar( 40 ),
-	state varchar( 255 )
+	state varchar( 255 ),
+	created datetime
 ) engine=InnoDB ;
 
-insert into addressbook values( NULL, 'A', 'B', '123456', 'route 66', 'C', '9876', 'Nowhere' );
+insert into addressbook values( NULL, 'A', 'B', '123456', 'route 66', 'C', '9876', 'Nowhere', now() );
+insert into addressbook values( NULL, 'D', 'E', '7890', 'Park Row', 'New York', '1234', NULL, now() );
+insert into addressbook values( NULL, 'D', 'E', '184736', 'Cove Road', 'Orleans', '', 'USA', now() );
 
