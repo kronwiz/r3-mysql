@@ -17,6 +17,7 @@ RXIEXT int R3MYSQL_connect ( RXIFRM *frm );
 RXIEXT int R3MYSQL_close ( RXIFRM *frm );
 RXIEXT int R3MYSQL_execute ( RXIFRM *frm );
 RXIEXT int R3MYSQL_fetch_row ( RXIFRM *frm );
+RXIEXT int R3MYSQL_set_autocommit ( RXIFRM *frm );
 
 #define MAKE_ERROR(message) R3MYSQL_make_error( frm, database, message )
 #define MAKE_OK() R3MYSQL_make_ok( frm )
@@ -62,6 +63,9 @@ RXIEXT int RX_Call ( int cmd, RXIFRM *frm, void *data ) {
 
 	case CMD_INT_FETCH_ROW:
 		return R3MYSQL_fetch_row ( frm );
+
+	case CMD_INT_SET_AUTOCOMMIT:
+		return R3MYSQL_set_autocommit ( frm );
 
 	default:
 		return RXR_NO_COMMAND;
@@ -184,30 +188,21 @@ RXIEXT int R3MYSQL_connect ( RXIFRM *frm ) {
 	printf ( "password: %s\n", password );
 	printf ( "name: %s\n", name ); */
 
-/*
-	dtype = RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-connection" ), &value );
-	switch ( dtype ) {
-		case RXT_NONE:
-			conn = NULL;
-			break;
-
-		case RXT_HANDLE:
-			conn = value.addr;
-			break;
-
-		default:
-			return MAKE_ERROR ( "Invalid connection argument" );
-	}
-*/
 
 	conn = mysql_init ( conn );
 	//if conn == NULL ...
+
+	mysql_options ( conn, MYSQL_OPT_RECONNECT, (const void *) "1" );
+	// TODO: enable when we're ready to change all Rebol strings to unicode
+	// mysql_options ( conn, MYSQL_SET_CHARSET_NAME, (const void *) "utf8" );
 
 	if ( mysql_real_connect ( conn, host, login, password, name, 0, 0, 0 ) == NULL ) {
 		int err = MAKE_ERROR ( mysql_error ( conn ) );
 		mysql_close ( conn );
 		return err;
 	}
+
+	mysql_autocommit ( conn, 1 );
 
 	printf ( "C: conn: %p\n", conn );
 
@@ -311,6 +306,7 @@ RXIEXT int R3MYSQL_fetch_row ( RXIFRM *frm ) {
 	REBSER *block = NULL;
 	REBSER *s = NULL;
 	unsigned int i = 0;
+	unsigned long *field_lengths = NULL;
 
 	if ( ( res = R3MYSQL_get_database_connection ( frm, TRUE, &database, &conn ) ) != RXR_TRUE ) return res;
 
@@ -340,6 +336,8 @@ RXIEXT int R3MYSQL_fetch_row ( RXIFRM *frm ) {
 		}
 	}
 
+	field_lengths = mysql_fetch_lengths ( result );
+
 	// transform the row in a Rebol block
 
 	dtype = RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "num-cols" ), &value );
@@ -361,22 +359,45 @@ RXIEXT int R3MYSQL_fetch_row ( RXIFRM *frm ) {
 		value.index = 0;
 		RL_SET_VALUE ( block, 2 * k, value, RXT_STRING );
 
-		// create the field value
-		// FIXME: here we should test the field type and change the Rebol value type accordingly.
-		// Beware of binary fields because they contain binary zeros!
+		if ( row [ k ] ) {
+			// create the field value
+			// TODO: here we should test the field type and change the Rebol value type accordingly.
+			// Beware of binary fields because they contain binary zeros!
 
-		// FIXME: strlen doesn't work with binary fields
-		s = RL_MAKE_STRING ( strlen ( row [ k ] ), 0 );
-		for ( i = 0; i < strlen ( row [ k ] ); i++ ) RL_SET_CHAR ( s, i, row [ k ] [ i ] );
+			s = RL_MAKE_STRING ( field_lengths [ k ], 0 );
+			for ( i = 0; i < field_lengths [ k ]; i++ ) RL_SET_CHAR ( s, i, row [ k ] [ i ] );
 
-		value.series = s;
-		value.index = 0;
-		RL_SET_VALUE ( block, ( 2 * k ) + 1, value, RXT_STRING );
+			value.series = s;
+			value.index = 0;
+			RL_SET_VALUE ( block, ( 2 * k ) + 1, value, RXT_STRING );
+
+		} else {
+			RL_SET_VALUE ( block, ( 2 * k ) + 1, value, RXT_NONE );
+		}
 	}
 
 	RXA_SERIES ( frm, 1 ) = block;
 	RXA_INDEX ( frm, 1 ) = 0;
 	RXA_TYPE ( frm, 1 ) = RXT_BLOCK;
 	return RXR_VALUE;
+}
+
+
+RXIEXT int R3MYSQL_set_autocommit ( RXIFRM *frm ) {
+	REBSER *database = NULL;
+	MYSQL *conn = NULL;
+	RXIARG value;
+	i32 enabled = 1;
+	int res = 0;
+
+	if ( ( res = R3MYSQL_get_database_connection ( frm, TRUE, &database, &conn ) ) != RXR_TRUE ) return res;
+
+	enabled = RXA_LOGIC ( frm, 2 );
+
+	mysql_autocommit ( conn, enabled );
+
+	value.int32a = enabled;
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "autocommit" ), value, RXT_LOGIC );
+	return MAKE_OK ();
 }
 
