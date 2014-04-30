@@ -33,6 +33,12 @@ int-fetch-row: command [
 	database [object!]
 ]
 
+int-set-autocommit: command [
+	database [object!]
+	enabled [logic!]
+]
+
+
 ; =====================
 ; Rebol level interface
 ; =====================
@@ -45,9 +51,10 @@ database: object [
 
 	; public fields
 
-	error: ""   ; error description
-	num-rows: 0  ; number of affected rows
-	num-cols: 0  ; number of fields in the result set
+	autocommit: true  ; (readonly) autocommit is enabled by default
+	error: ""   ; (readonly) error description
+	num-rows: 0  ; (readonly) number of affected rows
+	num-cols: 0  ; (readonly) number of fields in the result set
 
 	connect: function [ host login password name ] [
 		int-connect self host login password name
@@ -57,12 +64,16 @@ database: object [
 		int-close self
 	]
 
-	execute: function [ sql ] [
+	execute: function [ sql [string!] ] [
 		int-execute self sql
 	]
 
 	fetch-row: function [] [
 		int-fetch-row self
+	]
+
+	set-autocommit: function [ enabled [logic!] ] [
+		int-set-autocommit self enabled
 	]
 ]
 
