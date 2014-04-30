@@ -42,6 +42,10 @@ while [ row <> none ] [
 	row: db/fetch-row
 ]
 
+print "^/* Set autocommit = false"
+db/set-autocommit false
+print [ "autocommit:" db/autocommit ]
+
 print "^/* Execute: select * from foobar -> fails"
 res: db/execute "select * from foobar"
 either res = false [
