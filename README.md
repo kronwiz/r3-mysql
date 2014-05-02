@@ -3,7 +3,7 @@ r3-mysql
 
 MySQL extension for Rebol3
 
-##About
+## About
 
 This extension allows Rebol 3 to connect to the MySQL database.
 
@@ -102,4 +102,13 @@ Every method raises an error creating an `error!` object, so that to check for a
     ]
 
 Printing the `error!` object you get the error message.
+
+
+## License
+
+This library is copyright by Andrea Galimberti. This library is under the GNU LESSER GENERAL PUBLIC LICENSE Version 3. For more information about using/distributing the library see the `LICENSE` file or go to http://www.gnu.org/copyleft/lesser.html.
+
+The above copyright notice, the licence and the following disclaimer shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES, EXPRESSED OR IMPLIED, WITH REGARD TO THIS SOFTWARE INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
