@@ -5,7 +5,6 @@ REBOL [
 	Exports: []
 ]
 
-print "Initializing extension..."
 
 ; ============================
 ; internal (C level) functions
@@ -57,25 +56,32 @@ database: object [
 	num-cols: 0  ; (readonly) number of fields in the result set
 
 	connect: function [ host login password name ] [
-		int-connect self host login password name
+		self/check-error int-connect self host login password name
 	]
 
 	close: function [] [
-		int-close self
+		self/check-error int-close self
 	]
 
 	execute: function [ sql [string!] ] [
-		int-execute self sql
+		self/check-error int-execute self sql
 	]
 
 	fetch-row: function [] [
-		int-fetch-row self
+		self/check-error int-fetch-row self
 	]
 
 	set-autocommit: function [ enabled [logic!] ] [
-		int-set-autocommit self enabled
+		self/check-error int-set-autocommit self enabled
+	]
+
+	check-error: function [ res ] [
+		either res = false [
+			cause-error 'user 'message self/error
+		] [
+			res
+		]
 	]
 ]
 
-print "Extension added"
 
