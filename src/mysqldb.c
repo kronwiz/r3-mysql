@@ -204,8 +204,6 @@ RXIEXT int R3MYSQL_connect ( RXIFRM *frm ) {
 
 	mysql_autocommit ( conn, 1 );
 
-	printf ( "C: conn: %p\n", conn );
-
 	value.addr = conn;
 	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-connection" ), value, RXT_HANDLE );
 	return MAKE_OK ();
@@ -221,8 +219,6 @@ RXIEXT int R3MYSQL_close ( RXIFRM *frm ) {
 	int res = 0;
 
 	if ( ( res = R3MYSQL_get_database_connection ( frm, TRUE, &database, &conn ) ) != RXR_TRUE ) return res;
-
-	printf ( "C: conn: %p\n", conn );
 
 	// free an existing result set
 	dtype = RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), &value );
@@ -277,17 +273,30 @@ RXIEXT int R3MYSQL_execute ( RXIFRM *frm ) {
 	}
 
 	if ( mysql_query ( conn, sql ) != 0 ) return MAKE_ERROR ( mysql_error ( conn ) );
+
 	result = mysql_store_result ( conn );
 	if ( mysql_errno ( conn ) ) return MAKE_ERROR ( mysql_error ( conn ) );
 
 	value.int64 = mysql_affected_rows ( conn );
 	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "num-rows" ), value, RXT_INTEGER );
 
-	value.int64 = mysql_num_fields ( result );
+	// result is NULL if the sql isn't a "select" query
+
+	if ( result ) {
+		value.int64 = mysql_num_fields ( result );
+	} else {
+		value.int64 = 0;
+	}
 	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "num-cols" ), value, RXT_INTEGER );
 
-	value.addr = result;
-	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), value, RXT_HANDLE );
+	if ( result ) {
+		value.addr = result;
+		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), value, RXT_HANDLE );
+	} else {
+		value.addr = 0;
+		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), value, RXT_NONE );
+	}
+
 	return MAKE_OK ();
 }
 
