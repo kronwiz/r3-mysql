@@ -74,7 +74,17 @@ To close the connection to the database you use:
 
     db/close
 
-Remeber to always do that before exiting the program, otherwise the server side connection will hang on until MySQL timeout elapses.
+Remember to always do that before exiting the program, otherwise the server side connection will hang on until MySQL timeout expires.
+
+Queries other than "select" are always executed with th `execute` method. For example, an insert query:
+
+    db/execute "insert into addressbook values( NULL, 'First', 'Last', '333.123.444', 'via di qua', 'non so', '9876', 'Italy', now() )"
+
+or a delete query:
+
+    db/execute "delete from addressbook where userid = '11'"
+
+After a query the `num-rows` attribute always contains the number of rows affected by the operation; in the case of a "select" query this is the number of rows returned by the select.
 
 
 ### Other attributes and methods
