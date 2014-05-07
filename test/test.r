@@ -18,6 +18,8 @@ either error? res: try [ db/connect "localhost" "test" "test" "test" ] [
 	print [ "int-connection:" db/int-connection ]
 ]
 
+;db/execute "set names 'utf8'"
+
 print "^/* Execute: select * from addressbook"
 either error? res: try [ db/execute "select * from addressbook" ] [
 	print res
@@ -51,11 +53,33 @@ either error? res: try [ db/execute "insert into addressbook values( NULL, 'Firs
 	print [ "Affected rows:" db/num-rows ]
 ]
 
-print "^/* Execute: delete from addressbook"
-either error? res: try [ db/execute "delete from addressbook where userid = '11'" ] [
+print "^/* Execute: insert into addressbook a field too long gets truncated"
+either error? res: try [ db/execute "insert into addressbook values( NULL, 'First', 'Last', '333.123.444', 'via di qua', 'non so', '12345678901234567890123456789012345678901234567890', 'Italy', now() )" ] [
 	print res
 ] [
 	print [ "Affected rows:" db/num-rows ]
+]
+
+print "^/* Execute: delete from addressbook"
+either error? res: try [ db/execute "delete from addressbook where firstname = 'First'" ] [
+	print res
+] [
+	print [ "Affected rows:" db/num-rows ]
+]
+
+print "^/* Execute: select * from images"
+either error? res: try [ db/execute "select * from images" ] [
+	print res
+] [
+	print [ "num-rows:" db/num-rows ]
+	print [ "num-cols:" db/num-cols ]
+]
+
+print "^/* Fetch row"
+row: db/fetch-row
+while [ row <> none ] [
+	probe row
+	row: db/fetch-row
 ]
 
 print "^/* Set autocommit = false"
