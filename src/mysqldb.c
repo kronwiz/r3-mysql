@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 #include <mysql/mysql.h>
 
 #include "reb-host.h"
@@ -18,6 +19,8 @@ RXIEXT int R3MYSQL_close ( RXIFRM *frm );
 RXIEXT int R3MYSQL_execute ( RXIFRM *frm );
 RXIEXT int R3MYSQL_fetch_row ( RXIFRM *frm );
 RXIEXT int R3MYSQL_set_autocommit ( RXIFRM *frm );
+
+void string_utf8_to_rebol_unicode ( uint8_t *s, REBSER *rebstr );
 
 #define MAKE_ERROR(message) R3MYSQL_make_error( frm, database, message )
 #define MAKE_OK() R3MYSQL_make_ok( frm )
@@ -193,7 +196,7 @@ RXIEXT int R3MYSQL_connect ( RXIFRM *frm ) {
 	//if conn == NULL ...
 
 	mysql_options ( conn, MYSQL_OPT_RECONNECT, (const void *) "1" );
-	// TODO: enable when we're ready to change all Rebol strings to unicode
+	// Probably this isn't needed because I used mysql_set_character_set() below.
 	// mysql_options ( conn, MYSQL_SET_CHARSET_NAME, (const void *) "utf8" );
 
 	if ( mysql_real_connect ( conn, host, login, password, name, 0, 0, 0 ) == NULL ) {
@@ -203,6 +206,7 @@ RXIEXT int R3MYSQL_connect ( RXIFRM *frm ) {
 	}
 
 	mysql_autocommit ( conn, 1 );
+	mysql_set_character_set ( conn, "utf8" );
 
 	value.addr = conn;
 	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-connection" ), value, RXT_HANDLE );
@@ -360,9 +364,8 @@ RXIEXT int R3MYSQL_fetch_row ( RXIFRM *frm ) {
 
 		// create the field name
 
-		// TODO: should be a unicode string?
-		s = RL_MAKE_STRING ( field->name_length, 0 );
-		for ( i = 0; i < field->name_length; i++ ) RL_SET_CHAR ( s, i, field->name [ i ] );
+		s = RL_MAKE_STRING ( field->name_length, 1 );
+		string_utf8_to_rebol_unicode ( (uint8_t *) field->name, s );
 
 		value.series = s;
 		value.index = 0;
@@ -370,11 +373,19 @@ RXIEXT int R3MYSQL_fetch_row ( RXIFRM *frm ) {
 
 		if ( row [ k ] ) {
 			// create the field value
-			// TODO: here we should test the field type and change the Rebol value type accordingly.
-			// Beware of binary fields because they contain binary zeros!
 
-			s = RL_MAKE_STRING ( field_lengths [ k ], 0 );
-			for ( i = 0; i < field_lengths [ k ]; i++ ) RL_SET_CHAR ( s, i, row [ k ] [ i ] );
+			s = RL_MAKE_STRING ( field_lengths [ k ], 1 );
+			//printf ( "C: field name: %s\n", field->name );
+
+			if (
+				( ( field->type == MYSQL_TYPE_STRING ) || ( field->type == MYSQL_TYPE_VAR_STRING ) || ( field->type == MYSQL_TYPE_BLOB ) )
+				&&
+				( field->flags & BINARY_FLAG )
+			) {
+				for ( i = 0; i < field_lengths [ k ]; i++ ) RL_SET_CHAR ( s, i, row [ k ] [ i ] );
+			} else {
+				string_utf8_to_rebol_unicode ( (uint8_t *) row [ k ], s );
+			}
 
 			value.series = s;
 			value.index = 0;
@@ -408,5 +419,93 @@ RXIEXT int R3MYSQL_set_autocommit ( RXIFRM *frm ) {
 	value.int32a = enabled;
 	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "autocommit" ), value, RXT_LOGIC );
 	return MAKE_OK ();
+}
+
+
+
+
+/*
+Flexible and Economical UTF-8 Decoder
+=====================================
+
+License
+
+Copyright (c) 2008-2009 Bjoern Hoehrmann <bjoern@hoehrmann.de>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+See http://bjoern.hoehrmann.de/utf-8/decoder/dfa/ for details.
+*/
+
+#define UTF8_ACCEPT 0
+#define UTF8_REJECT 12
+
+static const uint8_t utf8d[] = {
+  // The first part of the table maps bytes to character classes that
+  // to reduce the size of the transition table and create bitmasks.
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+   1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,  9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+   8,8,2,2,2,2,2,2,2,2,2,2,2,2,2,2,  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+  10,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3, 11,6,6,6,5,8,8,8,8,8,8,8,8,8,8,8,
+
+  // The second part is a transition table that maps a combination
+  // of a state of the automaton and a character class to a state.
+   0,12,24,36,60,96,84,12,12,12,48,72, 12,12,12,12,12,12,12,12,12,12,12,12,
+  12, 0,12,12,12,12,12, 0,12, 0,12,12, 12,24,12,12,12,12,12,24,12,24,12,12,
+  12,12,12,12,12,12,12,24,12,12,12,12, 12,24,12,12,12,12,12,12,12,24,12,12,
+  12,12,12,12,12,12,12,36,12,36,12,12, 12,36,12,12,12,12,12,36,12,36,12,12,
+  12,36,12,12,12,12,12,12,12,12,12,12, 
+};
+
+inline uint32_t
+decode(uint32_t* state, uint32_t* codep, uint32_t byte) {
+  uint32_t type = utf8d[byte];
+
+  *codep = (*state != UTF8_ACCEPT) ?
+    (byte & 0x3fu) | (*codep << 6) :
+    (0xff >> type) & (byte);
+
+  *state = utf8d[256 + *state + type];
+  return *state;
+}
+
+/* =============================================== */
+
+void string_utf8_to_rebol_unicode ( uint8_t* s, REBSER* rebstr ) {
+  uint32_t codepoint;
+  uint32_t state = 0;
+
+	//printf ( "C: printCodePoints: from = %s\n", s );
+
+	int i = 0;
+  for (; *s; ++s)
+    if (!decode(&state, &codepoint, *s)) {
+      //printf("i: %d -> U+%04X\n", i, codepoint);
+			RL_SET_CHAR ( rebstr, i, codepoint );
+			i++;
+		}
+
+  if (state != UTF8_ACCEPT)
+    printf("The string is not well-formed\n");
+
 }
 
