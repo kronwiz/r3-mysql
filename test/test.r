@@ -18,7 +18,21 @@ either error? res: try [ db/connect "localhost" "test" "test" "test" ] [
 	print [ "int-connection:" db/int-connection ]
 ]
 
-;db/execute "set names 'utf8'"
+; print the charsets so we're sure we're using utf8
+print "^/* Execute: show variables like '%char%'"
+either error? res: try [ db/execute "show variables like '%char%'" ] [
+	print res
+] [
+	print [ "num-rows:" db/num-rows ]
+	print [ "num-cols:" db/num-cols ]
+]
+
+print "^/* Fetch row"
+row: db/fetch-row
+while [ row <> none ] [
+	print [ "row:" row ]
+	row: db/fetch-row
+]
 
 print "^/* Execute: select * from addressbook"
 either error? res: try [ db/execute "select * from addressbook" ] [

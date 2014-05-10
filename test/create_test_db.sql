@@ -17,6 +17,7 @@ create table addressbook (
 insert into addressbook values( NULL, 'A', 'B', '123456', 'route 66', 'C', '9876', 'Nowhere', now() );
 insert into addressbook values( NULL, 'D', 'E', '7890', 'Park Row', 'New York', '1234', NULL, now() );
 insert into addressbook values( NULL, 'D', 'E', '184736', 'Cove Road', 'Orleans', '', 'USA', now() );
+insert into addressbook values( NULL, 'àèéìòù€', 'B', '234', 'X', 'Y', '76', 'Z', now() );
 
 create table images (
 	name varchar( 100 ) not null,
