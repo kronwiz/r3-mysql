@@ -41,6 +41,7 @@ either error? res: try [ db/execute "select * from addressbook" ] [
 	print [ "int-result:" db/int-result ]
 	print [ "num-rows:" db/num-rows ]
 	print [ "num-cols:" db/num-cols ]
+	print [ "last-insert-id:" db/last-insert-id ]
 ]
 
 print "^/* Fetch row"
@@ -65,6 +66,7 @@ either error? res: try [ db/execute "insert into addressbook values( NULL, 'Firs
 	print res
 ] [
 	print [ "Affected rows:" db/num-rows ]
+	print [ "last-insert-id:" db/last-insert-id ]
 ]
 
 print "^/* Execute: insert into addressbook a field too long gets truncated"

@@ -25,6 +25,9 @@ void string_utf8_to_rebol_unicode ( uint8_t *s, REBSER *rebstr );
 #define MAKE_ERROR(message) R3MYSQL_make_error( frm, database, message )
 #define MAKE_OK() R3MYSQL_make_ok( frm )
 
+#define EXECUTE_QUERY_RETRIES 5  // number of times to retry the query if an error occurs
+#define ER_LOCK_DEADLOCK 1213    // MySQL code for deadlock error
+
 /* {{{ RX_Init ( int opts, RL_LIB *lib )
 
 Rebol extension initialization function.
@@ -163,6 +166,16 @@ RXIEXT int R3MYSQL_get_database_connection ( RXIFRM *frm, BOOL null_is_error, RE
 }
 // }}}
 
+/* {{{ RXIEXT int R3MYSQL_connect ( RXIFRM *frm )
+
+Connects to the database.
+
+Parameters:
+
+- frm: Rebol command frame;
+
+Calls R3MYSQL_make_ok on success, R3MYSQL_make_error on error.
+*/
 RXIEXT int R3MYSQL_connect ( RXIFRM *frm ) {
 	REBSER *database, *rhost, *rlogin, *rpassword, *rname = NULL;
 	char *host, *login, *password, *name = NULL;
@@ -212,8 +225,18 @@ RXIEXT int R3MYSQL_connect ( RXIFRM *frm ) {
 	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-connection" ), value, RXT_HANDLE );
 	return MAKE_OK ();
 }
+// }}}
 
+/* {{{ R3MYSQL_close ( RXIFRM *frm )
 
+Closes the connection to the database.
+
+Parameters:
+
+- frm: Rebol command frame;
+
+Calls R3MYSQL_make_ok on success, R3MYSQL_make_error on error.
+*/
 RXIEXT int R3MYSQL_close ( RXIFRM *frm ) {
 	REBSER *database = NULL;
 	MYSQL *conn = NULL;
@@ -240,8 +263,18 @@ RXIEXT int R3MYSQL_close ( RXIFRM *frm ) {
 	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-connection" ), value, RXT_NONE );
 	return MAKE_OK ();
 }
+// }}}
 
+/* {{{ R3MYSQL_execute ( RXIFRM *frm )
 
+Executes the query and stores the result (if any).
+
+Parameters:
+
+- frm: Rebol command frame;
+
+Calls R3MYSQL_make_ok on success, R3MYSQL_make_error on error.
+*/
 RXIEXT int R3MYSQL_execute ( RXIFRM *frm ) {
 	REBSER *database = NULL;
 	REBSER *rsql = NULL;
@@ -250,6 +283,7 @@ RXIEXT int R3MYSQL_execute ( RXIFRM *frm ) {
 	int res = 0;
 	int dtype = 0;
 	RXIARG value;
+	RXIARG r_num_fields;
 	char *sql = NULL;
 
 	if ( ( res = R3MYSQL_get_database_connection ( frm, TRUE, &database, &conn ) ) != RXR_TRUE ) return res;
@@ -276,7 +310,20 @@ RXIEXT int R3MYSQL_execute ( RXIFRM *frm ) {
 			return MAKE_ERROR ( "Invalid result handle" );
 	}
 
-	if ( mysql_query ( conn, sql ) != 0 ) return MAKE_ERROR ( mysql_error ( conn ) );
+	// perform the query
+	int count = 0;
+
+	while ( count < EXECUTE_QUERY_RETRIES ) {
+		if ( mysql_query ( conn, sql ) != 0 ) {
+			if ( ( mysql_errno ( conn ) == ER_LOCK_DEADLOCK ) && ( count++ < EXECUTE_QUERY_RETRIES ) )
+				continue;
+			else
+				return MAKE_ERROR ( mysql_error ( conn ) );
+		} else
+			break;
+	}
+
+	// retrieve results
 
 	result = mysql_store_result ( conn );
 	if ( mysql_errno ( conn ) ) return MAKE_ERROR ( mysql_error ( conn ) );
@@ -287,24 +334,47 @@ RXIEXT int R3MYSQL_execute ( RXIFRM *frm ) {
 	// result is NULL if the sql isn't a "select" query
 
 	if ( result ) {
-		value.int64 = mysql_num_fields ( result );
-	} else {
-		value.int64 = 0;
-	}
-	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "num-cols" ), value, RXT_INTEGER );
-
-	if ( result ) {
+		r_num_fields.int64 = mysql_num_fields ( result );
 		value.addr = result;
 		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), value, RXT_HANDLE );
+
 	} else {
+		r_num_fields.int64 = 0;
 		value.addr = 0;
 		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), value, RXT_NONE );
+
+		if ( mysql_field_count ( conn ) == 0 && mysql_insert_id ( conn ) != 0 ) {
+			value.int64 = mysql_insert_id ( conn );
+			RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "last-insert-id" ), value, RXT_INTEGER );
+		} else {
+			value.int64 = 0;
+			RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "last-insert-id" ), value, RXT_NONE );
+		}
 	}
+
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "num-cols" ), r_num_fields, RXT_INTEGER );
 
 	return MAKE_OK ();
 }
+// }}}
 
+/* {{{ R3MYSQL_fetch_row ( RXIFRM *frm )
 
+Retrieves a single row of data.
+
+Parameters:
+
+- frm: Rebol command frame;
+
+Returns a block containing the row data. Each field is represented by two
+strings: the first is the field name and the second is the field value.
+
+Example:
+
+    [ "field A" "value A" "field B" "value B" ... ]
+
+Calls R3MYSQL_make_error on error.
+*/
 RXIEXT int R3MYSQL_fetch_row ( RXIFRM *frm ) {
 	REBSER *database = NULL;
 	MYSQL *conn = NULL;
@@ -401,8 +471,18 @@ RXIEXT int R3MYSQL_fetch_row ( RXIFRM *frm ) {
 	RXA_TYPE ( frm, 1 ) = RXT_BLOCK;
 	return RXR_VALUE;
 }
+// }}}
 
+/* {{{ R3MYSQL_set_autocommit ( RXIFRM *frm )
 
+Sets the autocommit flag.
+
+Parameters:
+
+- frm: Rebol command frame;
+
+Calls R3MYSQL_make_ok on success, R3MYSQL_make_error on error.
+*/
 RXIEXT int R3MYSQL_set_autocommit ( RXIFRM *frm ) {
 	REBSER *database = NULL;
 	MYSQL *conn = NULL;
@@ -420,7 +500,7 @@ RXIEXT int R3MYSQL_set_autocommit ( RXIFRM *frm ) {
 	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "autocommit" ), value, RXT_LOGIC );
 	return MAKE_OK ();
 }
-
+// }}}
 
 
 
