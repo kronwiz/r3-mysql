@@ -76,7 +76,7 @@ To close the connection to the database you use:
 
 Remember to always do that before exiting the program, otherwise the server side connection will hang on until MySQL timeout expires.
 
-Queries other than "select" are always executed with th `execute` method. For example, an insert query:
+Queries other than "select" are always executed with the `execute` method. For example, an insert query:
 
     db/execute "insert into addressbook values( NULL, 'First', 'Last', '333.123.444', 'via di qua', 'non so', '9876', 'Italy', now() )"
 
@@ -86,6 +86,8 @@ or a delete query:
 
 After a query the `num-rows` attribute always contains the number of rows affected by the operation; in the case of a "select" query this is the number of rows returned by the select.
 
+If you insert a record into a table that contains an `AUTO_INCREMENT` column, you can obtain the value stored into that column by reading the `last-insert-id` attribute. 
+
 
 ### Other attributes and methods
 
@@ -93,7 +95,8 @@ The `database` object has the following **readonly** attributes:
 
 - `num-rows`: number of affected rows. It is filled after a query;
 - `num-cols`: number of fields in the result set. It is filled after a `select` query;
-- `autocommit`: is `true` if autocommit is enabled (default), otherwise `false`.
+- `autocommit`: is `true` if autocommit is enabled (default), otherwise `false`;
+- `last-insert-id`: is the auto increment id of the last inserted row. It's `none` if there's no `AUTO_INCREMENT` column or the last query wasn't an "insert" one.
 
 Beside the methods highlighted before, the `database` object has also the following:
 
