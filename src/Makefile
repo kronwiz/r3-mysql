@@ -5,7 +5,7 @@ LIBS=`mysql_config --libs`
 INCLUDES=-I/usr/local/include/rebol
 LIBFLAGS=-shared
 
-OBJS=mysqldb.o
+OBJS=mysqldb.o utils.o
 
 all: lib
 
@@ -17,6 +17,10 @@ lib: $(OBJS)
 	@$(CC) $(LIBFLAGS) -Wl,-soname,mysqldb.so -o mysqldb.so $(OBJS) $(LIBS)
 
 mysqldb.o: mysqldb.c mysqldb_init.h
+	@echo "Building $@"
+	$(CC) -c $(CFLAGS) $(INCLUDES) $< -o $@
+
+utils.o: utils.c utils.h
 	@echo "Building $@"
 	$(CC) -c $(CFLAGS) $(INCLUDES) $< -o $@
 
