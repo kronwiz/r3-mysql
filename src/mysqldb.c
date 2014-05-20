@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <mysql/mysql.h>
 
 #ifndef REB_HOST_H
@@ -169,7 +170,7 @@ RXIEXT int R3MYSQL_get_database_connection ( RXIFRM *frm, BOOL null_is_error, RE
 }
 // }}}
 
-/* {{{ RXIEXT int R3MYSQL_connect ( RXIFRM *frm )
+/* {{{ R3MYSQL_connect ( RXIFRM *frm )
 
 Connects to the database.
 
@@ -288,11 +289,12 @@ RXIEXT int R3MYSQL_execute ( RXIFRM *frm ) {
 	RXIARG value;
 	RXIARG r_num_fields;
 	char *sql = NULL;
+	int sqllength = 0;  // sql statement length if it's a standard string (Rebol returns a negative value)
+	int utf8string_length = 0;  // length of the UTF8 buffer to allocate
+	int stmt_length = 0;  // actual length of the sql statement (after conversion to UTF8 if needed)
 
 	if ( ( res = R3MYSQL_get_database_connection ( frm, TRUE, &database, &conn ) ) != RXR_TRUE ) return res;
 	rsql = RXA_SERIES ( frm, 2 );
-	// TODO: verify if strings are in UTF8
-	RL_GET_STRING ( rsql, 0, (void **) &sql );
 
 	// free an existing result set (if any)
 	dtype = RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), &value );
@@ -316,15 +318,30 @@ RXIEXT int R3MYSQL_execute ( RXIFRM *frm ) {
 	// perform the query
 	int count = 0;
 
+	sqllength = RL_GET_STRING ( rsql, 0, (void **) &sql );
+	// if the string is unicode we have to encode it in UTF8 before sending it to the database
+	if ( sqllength > 0 ) {
+		utf8string_length = ( sqllength *3 ) + 1;  // the +1 is for the trailing \0
+		sql = malloc ( utf8string_length );
+		bzero ( sql, utf8string_length );
+		stmt_length = string_rebol_unicode_to_utf8 ( sql, utf8string_length, rsql );
+	} else {
+		stmt_length = -1 * sqllength;
+	}
+
 	while ( count < EXECUTE_QUERY_RETRIES ) {
-		if ( mysql_query ( conn, sql ) != 0 ) {
+		if ( mysql_real_query ( conn, sql, stmt_length ) != 0 ) {
 			if ( ( mysql_errno ( conn ) == ER_LOCK_DEADLOCK ) && ( count++ < EXECUTE_QUERY_RETRIES ) )
 				continue;
-			else
+			else {
+				if ( sqllength > 0 ) free ( sql );
 				return MAKE_ERROR ( mysql_error ( conn ) );
+			}
 		} else
 			break;
 	}
+
+	if ( sqllength > 0 ) free ( sql );
 
 	// retrieve results
 

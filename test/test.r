@@ -76,8 +76,15 @@ either error? res: try [ db/execute "insert into addressbook values( NULL, 'Firs
 	print [ "Affected rows:" db/num-rows ]
 ]
 
+print "^/* Execute: insert into addressbook unicode characters"
+either error? res: try [ db/execute "insert into addressbook values( NULL, 'àèéìòù€', 'Unicode', '234', 'X', 'Y', '76', 'Z', now() )" ] [
+	print res
+] [
+	print [ "Affected rows:" db/num-rows ]
+]
+
 print "^/* Execute: delete from addressbook"
-either error? res: try [ db/execute "delete from addressbook where firstname = 'First'" ] [
+either error? res: try [ db/execute "delete from addressbook where firstname = 'First' or lastname = 'Unicode'" ] [
 	print res
 ] [
 	print [ "Affected rows:" db/num-rows ]

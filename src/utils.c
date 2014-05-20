@@ -64,7 +64,7 @@ decode(uint32_t* state, uint32_t* codep, uint32_t byte) {
   return *state;
 }
 
-/* =============================================== */
+/* ======================== Decoder end =========================== */
 
 void string_utf8_to_rebol_unicode ( uint8_t* s, REBSER* rebstr ) {
   uint32_t codepoint;
@@ -83,5 +83,65 @@ void string_utf8_to_rebol_unicode ( uint8_t* s, REBSER* rebstr ) {
   if (state != UTF8_ACCEPT)
     printf("The string is not well-formed\n");
 
+}
+
+
+/*
+UTF8 Encoder
+============
+
+Got inspiration from: http://www.cprogramming.com/tutorial/unicode.html
+
+by Jeff Bezanson
+placed in the public domain Fall 2005
+*/
+
+/* string_rebol_unicode_to_utf8 ( char *dest, int dest_size, REBSER *src )
+
+Converts a Rebol unicode string to a UTF8 encoded byte sequence.
+
+Parameters:
+
+- dest: destination buffer;
+- dest_size: length in bytes of the destination buffer;
+- src: Rebol unicode string.
+
+Dest will only be '\0'-terminated if there is enough space.
+
+Returns the actual utf8 string length in bytes.
+*/
+int string_rebol_unicode_to_utf8 ( char *dest, int dest_size, REBSER *src )
+{
+    int character;
+    int i = 0;
+		char *dest_start = dest;
+    char *dest_end = dest + dest_size;
+
+    while ( ( character = RL_GET_CHAR ( src, i++ ) ) != -1 ) {
+        if ( character < 0x80 ) {
+            if ( dest >= dest_end ) return i;
+            *dest++ = (char) character;
+        }
+        else if ( character < 0x800 ) {
+            if ( dest >= dest_end - 1 ) return i;
+            *dest++ = ( character >> 6 ) | 0xC0;
+            *dest++ = ( character & 0x3F ) | 0x80;
+        }
+        else if ( character < 0x10000 ) {
+            if ( dest >= dest_end - 2 ) return i;
+            *dest++ = ( character >> 12 ) | 0xE0;
+            *dest++ = ( ( character >> 6 ) & 0x3F ) | 0x80;
+            *dest++ = ( character & 0x3F ) | 0x80;
+        }
+        else if ( character < 0x110000 ) {
+            if ( dest >= dest_end - 3 ) return i;
+            *dest++ = ( character >> 18 ) | 0xF0;
+            *dest++ = ( ( character >> 12 ) & 0x3F) | 0x80;
+            *dest++ = ( ( character >> 6 ) & 0x3F) | 0x80;
+            *dest++ = ( character & 0x3F ) | 0x80;
+        }
+    }
+    if ( dest < dest_end ) *dest = '\0';
+    return dest - dest_start;
 }
 
