@@ -60,13 +60,33 @@ If the query was a `select` you have to fetch the result set. You fetch it a row
 
 The `row` is a series of field name, field value. For example, from the test database:
 
-    ["userid" "1" "firstname" "A" "lastname" "B" "phone" "123456" "address" "route" "66" "city" "C" "zip" "9876" "state" "Nowhere" "created" "2014-04-30 20:33:54"]
+    ["userid" 1 "firstname" "A" "lastname" "B" "phone" "123456" "address" "route 66" "city" "C" "zip" "9876" "state" "Nowhere" "created" 27-May-2014/9:08:50 "mod_date" 27-May-2014 "mod_time" 9:08:50 "height" 12.754638 "width" "12.7546"]
 
 This plays well with `select` so that to retrieve a field value you can do:
 
     address: select row "address"
 
-Note that all fields are returned as strings. **This may change in the future: the idea is to map MySQL datatypes to Rebol datatypes when possible.** The `NULL` value is returned as `none`.
+The Rebol datatype of a field value depends on the field type in MySQL. The conversion table is as follows:
+
+| MySQL field type | Rebol datatype |
+|:---------------- |:-------------- |
+| TINY             | integer! |
+| SHORT            | integer! |
+| TYPE             | integer! |
+| INT24            | integer! |
+| LONGLONG         | integer! |
+| DECIMAL          | decimal! |
+| NEWDECIMAL       | decimal! |
+| DOUBLE           | decimal! |
+| DATE             | date! (without time part) |
+| DATETIME         | date! (with time part) |
+| TIMESTAMP        | date! (with time part) |
+| TIME             | time! |
+| everything else  | string! |
+
+When a field is returned as a string it's converted to unicode except if it's marked by MySQL as binary in which case all its bytes are left untouched.
+
+The `NULL` value is returned as `none`.
 
 When there are no more rows `db/fetch-row` returns `none`.
 
@@ -84,7 +104,9 @@ or a delete query:
 
     db/execute "delete from addressbook where userid = '11'"
 
-After a query the `num-rows` attribute always contains the number of rows affected by the operation; in the case of a "select" query this is the number of rows returned by the select.
+After a query the `num-rows` attribute contains the number of rows affected by the operation.
+
+In the case of a "select" query the `num-rows` value is set only if the result has been buffered on the client side. This is due to MySQL behaviour: by default, result sets for successfully executed queries are not buffered on the client and `fetch-row` fetches them one at a time from the server; in this case the total number of rows is not known in advance and `num-rows` is set to `-1`. To cause the complete result set to be buffered on the client you should set the database `store-result-client-side` attribute to `true` *before* calling the `execute` method; in this case `num-rows` is set to the total number of rows in the result set.
 
 If you insert a record into a table that contains an `AUTO_INCREMENT` column, you can obtain the value stored into that column by reading the `last-insert-id` attribute. 
 
@@ -97,6 +119,10 @@ The `database` object has the following **readonly** attributes:
 - `num-cols`: number of fields in the result set. It is filled after a `select` query;
 - `autocommit`: is `true` if autocommit is enabled (default), otherwise `false`;
 - `last-insert-id`: is the auto increment id of the last inserted row. It's `none` if there's no `AUTO_INCREMENT` column or the last query wasn't an "insert" one.
+
+and the following **read/write** attributes:
+
+- `store-result-client-side`: (default `false`) if set to `true` *before* executing a query causes the complete result set to be buffered on the client.
 
 Beside the methods highlighted before, the `database` object has also the following:
 

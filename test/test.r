@@ -47,7 +47,7 @@ either error? res: try [ db/execute "select * from addressbook" ] [
 print "^/* Fetch row"
 row: db/fetch-row
 while [ row <> none ] [
-	print [ "row:" row ]
+	print [ "row:" mold row ]
 	print [ "address:" select row "address" ]
 	row: db/fetch-row
 ]
@@ -62,7 +62,7 @@ either error? res: try [ db/execute "select * from foobar" ] [
 ]
 
 print "^/* Execute: insert into addressbook"
-either error? res: try [ db/execute "insert into addressbook values( NULL, 'First', 'Last', '333.123.444', 'via di qua', 'non so', '9876', 'Italy', now() )" ] [
+either error? res: try [ db/execute "insert into addressbook values( NULL, 'First', 'Last', '333.123.444', 'via di qua', 'non so', '9876', 'Italy', now(), date( now() ), time( now() ), '5634.333', '23.16432' )" ] [
 	print res
 ] [
 	print [ "Affected rows:" db/num-rows ]
@@ -70,14 +70,14 @@ either error? res: try [ db/execute "insert into addressbook values( NULL, 'Firs
 ]
 
 print "^/* Execute: insert into addressbook a field too long gets truncated"
-either error? res: try [ db/execute "insert into addressbook values( NULL, 'First', 'Last', '333.123.444', 'via di qua', 'non so', '12345678901234567890123456789012345678901234567890', 'Italy', now() )" ] [
+either error? res: try [ db/execute "insert into addressbook values( NULL, 'First', 'Last', '333.123.444', 'via di qua', 'non so', '12345678901234567890123456789012345678901234567890', 'Italy', now(), date( now() ), time( now() ), '5634.333', '23.16432' )" ] [
 	print res
 ] [
 	print [ "Affected rows:" db/num-rows ]
 ]
 
 print "^/* Execute: insert into addressbook unicode characters"
-either error? res: try [ db/execute "insert into addressbook values( NULL, 'àèéìòù€', 'Unicode', '234', 'X', 'Y', '76', 'Z', now() )" ] [
+either error? res: try [ db/execute "insert into addressbook values( NULL, 'àèéìòù€', 'Unicode', '234', 'X', 'Y', '76', 'Z', now(), date( now() ), time( now() ), '5634.333', '23.16432' )" ] [
 	print res
 ] [
 	print [ "Affected rows:" db/num-rows ]

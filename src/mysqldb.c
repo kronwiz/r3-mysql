@@ -25,6 +25,11 @@ RXIEXT int R3MYSQL_close ( RXIFRM *frm );
 RXIEXT int R3MYSQL_execute ( RXIFRM *frm );
 RXIEXT int R3MYSQL_fetch_row ( RXIFRM *frm );
 RXIEXT int R3MYSQL_set_autocommit ( RXIFRM *frm );
+RXIEXT int R3MYSQL_execute_prepared_stmt ( RXIFRM *frm );
+RXIEXT int R3MYSQL_fetch_row_prepared_stmt ( RXIFRM *frm );
+void R3MYSQL_build_bind_from_param ( MYSQL_BIND mbind, int dtype, RXIARG value );
+MYSQL_BIND *R3MYSQL_build_bind_for_result ( MYSQL_RES *result, i64 num_cols, REBSER *field_convert_list );
+void R3MYSQL_free_prepared_stmt ( REBSER *database );
 
 #define MAKE_ERROR(message) R3MYSQL_make_error( frm, database, message )
 #define MAKE_OK() R3MYSQL_make_ok( frm )
@@ -69,10 +74,10 @@ RXIEXT int RX_Call ( int cmd, RXIFRM *frm, void *data ) {
 		return R3MYSQL_close ( frm );
 
 	case CMD_INT_EXECUTE:
-		return R3MYSQL_execute ( frm );
+		return R3MYSQL_execute_prepared_stmt ( frm );
 
 	case CMD_INT_FETCH_ROW:
-		return R3MYSQL_fetch_row ( frm );
+		return R3MYSQL_fetch_row_prepared_stmt ( frm );
 
 	case CMD_INT_SET_AUTOCOMMIT:
 		return R3MYSQL_set_autocommit ( frm );
@@ -261,15 +266,21 @@ RXIEXT int R3MYSQL_close ( RXIFRM *frm ) {
 		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), value, RXT_NONE );
 	}
 
+	// free an existing prepared statement
+	R3MYSQL_free_prepared_stmt ( database );
+
 	mysql_close ( conn );
 
 	value.addr = NULL;
 	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-connection" ), value, RXT_NONE );
+
 	return MAKE_OK ();
 }
 // }}}
 
 /* {{{ R3MYSQL_execute ( RXIFRM *frm )
+
+DEPRECATED: now the queries are always executed using R3MYSQL_execute_prepared_stmt().
 
 Executes the query and stores the result (if any).
 
@@ -379,6 +390,8 @@ RXIEXT int R3MYSQL_execute ( RXIFRM *frm ) {
 // }}}
 
 /* {{{ R3MYSQL_fetch_row ( RXIFRM *frm )
+
+DEPRECATED: now a result set is always retrieved using R3MYSQL_fetch_row_prepared_stmt().
 
 Retrieves a single row of data.
 
@@ -522,4 +535,672 @@ RXIEXT int R3MYSQL_set_autocommit ( RXIFRM *frm ) {
 }
 // }}}
 
+/* {{{ R3MYSQL_execute_prepared_stmt ( RXIFRM *frm )
+
+Executes the query and binds the buffers to retrieve the result (if any).
+
+Parameters:
+
+- frm: Rebol command frame;
+
+Calls R3MYSQL_make_ok on success, R3MYSQL_make_error on error.
+*/
+RXIEXT int R3MYSQL_execute_prepared_stmt ( RXIFRM *frm ) {
+	REBSER *database = NULL;
+	REBSER *rsql = NULL;
+	REBSER *params = NULL;
+	MYSQL *conn = NULL;
+	MYSQL_RES *result = NULL;
+	MYSQL_STMT *mstmt = NULL;
+	MYSQL_BIND *mbind_arr = NULL;
+	MYSQL_BIND mbind;
+	int res = 0;
+	int dtype = 0;
+	int params_length = 0;
+	RXIARG value;
+	RXIARG r_num_fields;
+	RXIARG r_num_rows;
+	int i = 0;
+	char *sql = NULL;
+	int sqllength = 0;  // sql statement length if it's a standard string (Rebol returns a negative value)
+	int utf8string_length = 0;  // length of the UTF8 buffer to allocate
+	int stmt_length = 0;  // actual length of the sql statement (after conversion to UTF8 if needed)
+	REBSER *field_convert_list = NULL;
+
+
+	if ( ( res = R3MYSQL_get_database_connection ( frm, TRUE, &database, &conn ) ) != RXR_TRUE ) return res;
+	rsql = RXA_SERIES ( frm, 2 );
+	params = RXA_SERIES ( frm, 3 );
+	if ( params ) params_length = RXI_SERIES_INFO ( params, RXI_SER_TAIL );
+
+	// free and close a previous statement (if any)
+	R3MYSQL_free_prepared_stmt ( database );
+
+	//printf ( "C: params length: %d\n", params_length );
+
+	// *** prepare the SQL string ***
+
+	sqllength = RL_GET_STRING ( rsql, 0, (void **) &sql );
+	// if the string is unicode we have to encode it in UTF8 before sending it to the database
+	if ( sqllength > 0 ) {
+		utf8string_length = ( sqllength * 3 ) + 1;  // the +1 is for the trailing \0
+		sql = malloc ( utf8string_length );
+		memset ( sql, 0, utf8string_length );
+		stmt_length = string_rebol_unicode_to_utf8 ( sql, utf8string_length, rsql );
+		value.addr = sql;
+		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-sql-string" ), value, RXT_HANDLE );
+	} else {
+		stmt_length = -1 * sqllength;
+	}
+
+	// *** initialize the statement ***
+
+	mstmt = mysql_stmt_init ( conn );
+	value.addr = mstmt;
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-statement" ), value, RXT_HANDLE );
+	if ( mysql_stmt_prepare ( mstmt, sql, stmt_length ) != 0 )
+		return MAKE_ERROR ( mysql_error ( conn ) );
+
+	//printf ( "C: mstmt: %p\n", mstmt );
+
+	// *** bind and fill the parameters ***
+
+	if ( params_length > 0 ) {
+		mbind_arr = malloc ( params_length * sizeof ( MYSQL_BIND ) );
+		memset ( mbind_arr, 0, params_length * sizeof ( MYSQL_BIND ) );
+		value.addr = mbind_arr;
+		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-params" ), value, RXT_HANDLE );
+		value.int64 = params_length;
+		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-params-length" ), value, RXT_INTEGER );
+
+		for ( i = 0; i < params_length; i++ ) {
+			mbind = mbind_arr [ i ];
+			dtype = RL_GET_VALUE ( params, i, &value );
+			R3MYSQL_build_bind_from_param ( mbind, dtype, value );
+		}
+
+		if ( mysql_stmt_bind_param ( mstmt, mbind_arr ) != 0 )
+			return MAKE_ERROR ( mysql_error ( conn ) );
+	}
+
+	// *** execute the statement ***
+
+	if ( mysql_stmt_execute ( mstmt ) != 0 )
+		return MAKE_ERROR ( mysql_error ( conn ) );
+
+	// *** bind the result buffers ***
+
+	if ( ( result = mysql_stmt_result_metadata ( mstmt ) ) != NULL ) {
+		r_num_fields.int64 = mysql_num_fields ( result );
+		r_num_rows.int64 = -1;
+
+		field_convert_list = RL_MAKE_BLOCK ( r_num_fields.int64 );
+		value.series = field_convert_list;
+		value.index = 0;
+		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-field-convert-list" ), value, RXT_BLOCK );
+
+		mbind_arr = R3MYSQL_build_bind_for_result ( result, r_num_fields.int64, field_convert_list );
+
+		value.addr = result;
+		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), value, RXT_HANDLE );
+		value.addr = mbind_arr;
+		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-result" ), value, RXT_HANDLE );
+		value.int64 = r_num_fields.int64;
+		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-result-length" ), value, RXT_INTEGER );
+
+		mysql_stmt_bind_result ( mstmt, mbind_arr );
+
+		RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "store-result-client-side" ), &value );
+		if ( value.int32a ) {
+			mysql_stmt_store_result ( mstmt );
+			r_num_rows.int64 = mysql_stmt_num_rows ( mstmt );
+		}
+
+	} else {
+		value.addr = 0;
+		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), value, RXT_NONE );
+
+		r_num_fields.int64 = 0;
+		r_num_rows.int64 = mysql_stmt_affected_rows ( mstmt );
+
+		if ( mysql_stmt_insert_id ( mstmt ) != 0 ) {
+			value.int64 = mysql_stmt_insert_id ( mstmt );
+			RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "last-insert-id" ), value, RXT_INTEGER );
+		} else {
+			value.int64 = 0;
+			RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "last-insert-id" ), value, RXT_NONE );
+		}
+	}
+
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "num-cols" ), r_num_fields, RXT_INTEGER );
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "num-rows" ), r_num_rows, RXT_INTEGER );
+
+	return MAKE_OK ();
+}
+// }}}
+
+/* {{{ R3MYSQL_build_bind_for_result ( MYSQL_RES *result, i64 num_cols, REBSER *field_convert_list )
+
+Creates the MYSQL_BIND array and allocates all the buffers needed to store the
+result set of the query.
+
+Parameters:
+
+- result: MYSQL_RES structure obtained from mysql_stmt_result_metadata();
+- num_cols: number of columns in the result set.
+
+Returns the MYSQL_BIND array address.
+
+From MySQL documentation the buffer types are:
+
+Input Variable C Type | buffer_type Value    | SQL Type of Destination Value
+======================+======================+==============================
+signed char           | MYSQL_TYPE_TINY      | TINYINT
+short int             | MYSQL_TYPE_SHORT     | SMALLINT
+int                   | MYSQL_TYPE_LONG      | INT
+long long int         | MYSQL_TYPE_LONGLONG  | BIGINT
+float                 | MYSQL_TYPE_FLOAT     | FLOAT
+double                | MYSQL_TYPE_DOUBLE    | DOUBLE
+MYSQL_TIME            | MYSQL_TYPE_TIME      | TIME
+MYSQL_TIME            | MYSQL_TYPE_DATE      | DATE
+MYSQL_TIME            | MYSQL_TYPE_DATETIME  | DATETIME
+MYSQL_TIME            | MYSQL_TYPE_TIMESTAMP | TIMESTAMP
+char[]                | MYSQL_TYPE_STRING    | TEXT, CHAR, VARCHAR
+char[]                | MYSQL_TYPE_BLOB      | BLOB, BINARY, VARBINARY
+                      | MYSQL_TYPE_NULL      | NULL
+
+and the field types are:
+
+Type Value            | Type Description
+======================+=================
+MYSQL_TYPE_TINY       | TINYINT field
+MYSQL_TYPE_SHORT      | SMALLINT field
+MYSQL_TYPE_LONG       | INTEGER field
+MYSQL_TYPE_INT24      | MEDIUMINT field
+MYSQL_TYPE_LONGLONG   | BIGINT field
+MYSQL_TYPE_DECIMAL    | DECIMAL or NUMERIC field
+MYSQL_TYPE_NEWDECIMAL | Precision math DECIMAL or NUMERIC field (MySQL 5.0.3 and up)
+MYSQL_TYPE_FLOAT      | FLOAT field
+MYSQL_TYPE_DOUBLE     | DOUBLE or REAL field
+MYSQL_TYPE_BIT        | BIT field (MySQL 5.0.3 and up)
+MYSQL_TYPE_TIMESTAMP  | TIMESTAMP field
+MYSQL_TYPE_DATE       | DATE field
+MYSQL_TYPE_TIME       | TIME field
+MYSQL_TYPE_DATETIME   | DATETIME field
+MYSQL_TYPE_YEAR       | YEAR field
+MYSQL_TYPE_STRING     | CHAR or BINARY field
+MYSQL_TYPE_VAR_STRING | VARCHAR or VARBINARY field
+MYSQL_TYPE_BLOB       | BLOB or TEXT field (use max_length to determine the maximum length)
+MYSQL_TYPE_SET        | SET field
+MYSQL_TYPE_ENUM       | ENUM field
+MYSQL_TYPE_GEOMETRY   | Spatial field
+MYSQL_TYPE_NULL       | NULL-type field
+
+*/
+MYSQL_BIND *R3MYSQL_build_bind_for_result ( MYSQL_RES *result, i64 num_cols, REBSER *field_convert_list ) {
+	MYSQL_BIND *mbind_arr = NULL;
+	MYSQL_BIND *mbind = NULL;
+	MYSQL_FIELD *field = NULL;
+	RXIARG value;
+	int i = 0;
+	int fcl_pos = 0;
+
+	//printf ( "C: >> R3MYSQL_build_bind_for_result\n" );
+
+	mbind_arr = malloc ( num_cols * sizeof ( MYSQL_BIND ) );
+	memset ( mbind_arr, 0, num_cols * sizeof ( MYSQL_BIND ) );
+
+	//printf ( "C: mbind_arr: %p\n", mbind_arr );
+
+	for ( i = 0; i < num_cols; i++ ) {
+		field = mysql_fetch_field_direct ( result, i );
+		mbind = &mbind_arr [ i ];
+		//printf ( "C: mbind: %p\n", mbind );
+
+		switch ( field->type ) {
+			case MYSQL_TYPE_TINY:
+			case MYSQL_TYPE_SHORT:
+			case MYSQL_TYPE_LONG:
+			case MYSQL_TYPE_INT24:
+			case MYSQL_TYPE_LONGLONG:
+				mbind->buffer_type = MYSQL_TYPE_LONGLONG;
+				mbind->buffer = malloc ( sizeof ( long long int ) );
+				memset ( mbind->buffer, 0, sizeof ( long long int ) );
+				mbind->buffer_length = sizeof ( long long int );
+				mbind->is_unsigned = (my_bool) 0;
+				break;
+
+			case MYSQL_TYPE_DECIMAL:
+			case MYSQL_TYPE_NEWDECIMAL:
+			case MYSQL_TYPE_DOUBLE:
+				mbind->buffer_type = MYSQL_TYPE_DOUBLE;
+				mbind->buffer = malloc ( sizeof ( double ) );
+				memset ( mbind->buffer, 0, sizeof ( double ) );
+				mbind->buffer_length = sizeof ( double );
+				mbind->is_unsigned = (my_bool) 0;
+				break;
+
+			// case MYSQL_TYPE_BIT:
+			// case MYSQL_TYPE_STRING:
+			// case MYSQL_TYPE_VAR_STRING:
+			// case MYSQL_TYPE_BLOB:
+			// case MYSQL_TYPE_SET:
+			// case MYSQL_TYPE_ENUM:
+			// case MYSQL_TYPE_GEOMETRY:
+			// case MYSQL_TYPE_NULL:
+
+			case MYSQL_TYPE_TIMESTAMP:
+			case MYSQL_TYPE_DATE:
+			case MYSQL_TYPE_TIME:
+			case MYSQL_TYPE_DATETIME:
+			// case MYSQL_TYPE_YEAR:
+				mbind->buffer_type = field->type;
+				mbind->buffer = malloc ( sizeof ( MYSQL_TIME ) );
+				memset ( mbind->buffer, 0, sizeof ( MYSQL_TIME ) );
+				mbind->buffer_length = sizeof ( MYSQL_TIME );
+
+				value.int64 = i + 1;
+				RL_SET_VALUE ( field_convert_list, fcl_pos++, value, RXT_INTEGER );
+				//printf ( "C: fcl_pos: %d\n", fcl_pos );
+				break;
+
+			default:
+				//printf ( "C: field->length: %d\n", field->length );
+				mbind->buffer_type = MYSQL_TYPE_STRING;
+				mbind->buffer = malloc ( field->length );
+				memset ( mbind->buffer, 0, field->length );
+				mbind->buffer_length = field->length;
+				break;
+		}
+
+		mbind->is_null = malloc ( sizeof ( my_bool ) );
+		memset ( (void *) mbind->is_null, 0, sizeof ( my_bool ) );
+		//printf ( "C: mbind.is_null: %p\n", mbind->is_null );
+		mbind->error = malloc ( sizeof ( my_bool ) );
+		memset ( (void *) mbind->error, 0, sizeof ( my_bool ) );
+		mbind->length = malloc ( sizeof ( unsigned long ) );
+		memset ( mbind->length, 0, sizeof ( unsigned long ) );
+	}
+
+	return mbind_arr;
+}
+// }}}
+
+// {{{ R3MYSQL_build_bind_from_param ( MYSQL_BIND mbind, int dtype, RXIARG value )
+void R3MYSQL_build_bind_from_param ( MYSQL_BIND mbind, int dtype, RXIARG value ) {
+	REBSER block;
+	char *strvalue = NULL;
+	int strval_len = 0;
+
+	switch ( dtype ) {
+		case RXT_BLOCK:
+			block = value.series;  // save for later use
+			RL_GET_VALUE ( block, 0, &value );
+			RL_GET_STRING ( value.series, 0, (void **) &strvalue );
+			printf ( "C: block of type: %s\n", strvalue );
+			break;
+
+		case RXT_STRING:
+			// TODO: should I encode the string in UTF8? How do I know if it's binary data?
+			RL_GET_STRING ( value.series, 0, (void **) &strvalue );
+			strval_len = RXI_SERIES_INFO ( value.series, RXI_SER_WIDE );
+			printf ( "C: %s\n", strvalue );
+			mbind.buffer_type = MYSQL_TYPE_STRING;
+			mbind.buffer = malloc ( strval_len );
+			memset ( mbind.buffer, 0, strval_len );
+			mbind.buffer_length = strval_len;
+			mbind.length = malloc ( sizeof ( unsigned long ) );
+			*(mbind.length) = strval_len;
+			memcpy ( mbind.buffer, strvalue, strval_len );
+			break;
+
+		case RXT_INTEGER:
+			printf ( "C: %d\n", (int) value.int64 );
+			mbind.buffer_type = MYSQL_TYPE_LONGLONG;
+			mbind.buffer = malloc ( sizeof ( i64 ) );
+			memset ( mbind.buffer, 0, sizeof ( i64 ) );
+			mbind.buffer_length = sizeof ( i64 );
+			mbind.is_unsigned = (my_bool) 0;
+			memcpy ( mbind.buffer, &value.int64, sizeof ( i64 ) );
+			break;
+
+		case RXT_NONE:
+			printf ( "C: none\n" );
+			break;
+
+		default:
+			printf ( "C: unknown type\n" );
+	}
+}
+// }}}
+
+/* {{{ R3MYSQL_fetch_row_prepared_stmt ( RXIFRM *frm )
+
+Retrieves a single row of data.
+
+Parameters:
+
+- frm: Rebol command frame;
+
+Returns a block containing the row data. Each field is represented by two
+values: the first is a string containing the field name and the second is the
+field value. The Rebol datatype of the field value depends on the field type.
+
+Example:
+
+    [ "field A" "value A" "field B" "value B" ... ]
+
+Calls R3MYSQL_make_error on error.
+*/
+RXIEXT int R3MYSQL_fetch_row_prepared_stmt ( RXIFRM *frm ) {
+	REBSER *database = NULL;
+	MYSQL *conn = NULL;
+	MYSQL_RES *result = NULL;
+	MYSQL_STMT *mstmt = NULL;
+	MYSQL_BIND *mbind_arr = NULL;
+	MYSQL_BIND *mbind;
+	MYSQL_FIELD *field = NULL;
+	int res = 0;
+	int dtype = 0;
+	RXIARG value;
+	int value_type = 0;
+	int num_cols = 0;
+	int k = 0;
+	REBSER *rowblock = NULL;
+	REBSER *block = NULL;
+	REBSER *s = NULL;
+	unsigned int i = 0;
+
+	char DATETIME_STRING[] = "datetime";
+	char TIME_STRING[] = "time";
+	char DATE_STRING[] = "date";
+	char *buffer_char = NULL;
+	long long int *buffer_int = NULL;
+	MYSQL_TIME *buffer_time = NULL;
+	double *buffer_double = NULL;
+
+
+	if ( ( res = R3MYSQL_get_database_connection ( frm, TRUE, &database, &conn ) ) != RXR_TRUE ) return res;
+
+	// get the prepared statement of the last query
+	dtype = RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-statement" ), &value );
+	switch ( dtype ) {
+		case RXT_NONE:
+			return MAKE_ERROR ( "Invalid statement handle: none" );
+			break;
+
+		case RXT_HANDLE:
+			mstmt = value.addr;
+			break;
+
+		default:
+			return MAKE_ERROR ( "Invalid statement handle" );
+	}
+
+	dtype = RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), &value );
+	result = value.addr;
+	dtype = RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-result" ), &value );
+	mbind_arr = value.addr;
+
+	//printf ( "C: 1. mstmt: %p\n", mstmt );
+
+	res = mysql_stmt_fetch ( mstmt );
+
+	//printf ( "C: 2. res: %d\n", res );
+
+	switch ( res ) {
+		case 1: // error
+			return MAKE_ERROR ( mysql_stmt_error ( mstmt ) );
+
+		case MYSQL_NO_DATA:
+			return RXR_NONE;
+	}
+
+	// transform the row in a Rebol block
+
+	//printf ( "C: 3\n" );
+
+	dtype = RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "num-cols" ), &value );
+	// TODO: signal a proper error
+	num_cols = ( dtype == RXT_INTEGER ) ? value.int64 : 0;
+
+	//printf ( "C: 4. num_cols: %d\n", num_cols );
+
+	rowblock = RL_MAKE_BLOCK ( num_cols * 2 );
+
+	for ( k = 0; k < num_cols; k++ ) {
+		field = mysql_fetch_field_direct ( result, k );
+
+		//printf ( "C: 5. field->name: %s\n", field->name );
+
+		// create the field name
+
+		s = RL_MAKE_STRING ( field->name_length, 1 );
+		string_utf8_to_rebol_unicode ( (uint8_t *) field->name, s );
+
+		value.series = s;
+		value.index = 0;
+		RL_SET_VALUE ( rowblock, 2 * k, value, RXT_STRING );
+
+		mbind = &mbind_arr [ k ];
+
+		//printf ( "C: 6. mbind: %p\n", mbind );
+		//printf ( "C: 6.1. mbind.is_null: %p\n", mbind->is_null );
+		//printf ( "C: 6.2. mbind.error: %d\n", *mbind->error );
+
+		if ( ! *mbind->is_null ) {
+			// create the field value
+
+			switch ( mbind->buffer_type ) {
+				/* For the possibile buffer types see the documentation of the
+				 * R3MYSQL_build_bind_for_result() function. */
+
+				case MYSQL_TYPE_LONGLONG:
+					//printf ( "C: 7. buffer_type: MYSQL_TYPE_LONGLONG\n" );
+
+					buffer_int = (long long int *) mbind->buffer;
+					value.int64 = *buffer_int;
+					value_type = RXT_INTEGER;
+					break;
+
+				case MYSQL_TYPE_DOUBLE:
+					buffer_double = (double *) mbind->buffer;
+					value.dec64 = *buffer_double;
+					value_type = RXT_DECIMAL;
+					break;
+
+				case MYSQL_TYPE_DATE:
+					buffer_time = (MYSQL_TIME *) mbind->buffer;
+					block = RL_MAKE_BLOCK ( 4 );
+					s = RL_MAKE_STRING ( 4, 0 );
+					for ( i = 0; i < 4; i++ ) RL_SET_CHAR ( s, i, DATE_STRING [ i ] );
+					value.series = s;
+					value.index = 0;
+					RL_SET_VALUE ( block, 0, value, RXT_STRING );
+
+					value.int64 = buffer_time->day;
+					RL_SET_VALUE ( block, 1, value, RXT_INTEGER );
+					value.int64 = buffer_time->month;
+					RL_SET_VALUE ( block, 2, value, RXT_INTEGER );
+					value.int64 = buffer_time->year;
+					RL_SET_VALUE ( block, 3, value, RXT_INTEGER );
+
+					value.series = block;
+					value.index = 0;
+					value_type = RXT_BLOCK;
+					break;
+
+				case MYSQL_TYPE_TIME:
+					buffer_time = (MYSQL_TIME *) mbind->buffer;
+					block = RL_MAKE_BLOCK ( 4 );
+					s = RL_MAKE_STRING ( 4, 0 );
+					for ( i = 0; i < 4; i++ ) RL_SET_CHAR ( s, i, TIME_STRING [ i ] );
+					value.series = s;
+					value.index = 0;
+					RL_SET_VALUE ( block, 0, value, RXT_STRING );
+
+					value.int64 = buffer_time->hour;
+					RL_SET_VALUE ( block, 1, value, RXT_INTEGER );
+					value.int64 = buffer_time->minute;
+					RL_SET_VALUE ( block, 2, value, RXT_INTEGER );
+					value.int64 = buffer_time->second;
+					RL_SET_VALUE ( block, 3, value, RXT_INTEGER );
+
+					value.series = block;
+					value.index = 0;
+					value_type = RXT_BLOCK;
+					break;
+
+				case MYSQL_TYPE_TIMESTAMP:
+				case MYSQL_TYPE_DATETIME:
+					//printf ( "C: 8. buffer_type: MYSQL_TYPE_DATETIME\n" );
+
+					buffer_time = (MYSQL_TIME *) mbind->buffer;
+					block = RL_MAKE_BLOCK ( 7 );
+					s = RL_MAKE_STRING ( 8, 0 );
+					for ( i = 0; i < 8; i++ ) RL_SET_CHAR ( s, i, DATETIME_STRING [ i ] );
+					value.series = s;
+					value.index = 0;
+					RL_SET_VALUE ( block, 0, value, RXT_STRING );
+
+					value.int64 = buffer_time->day;
+					RL_SET_VALUE ( block, 1, value, RXT_INTEGER );
+					value.int64 = buffer_time->month;
+					RL_SET_VALUE ( block, 2, value, RXT_INTEGER );
+					value.int64 = buffer_time->year;
+					RL_SET_VALUE ( block, 3, value, RXT_INTEGER );
+					value.int64 = buffer_time->hour;
+					RL_SET_VALUE ( block, 4, value, RXT_INTEGER );
+					value.int64 = buffer_time->minute;
+					RL_SET_VALUE ( block, 5, value, RXT_INTEGER );
+					value.int64 = buffer_time->second;
+					RL_SET_VALUE ( block, 6, value, RXT_INTEGER );
+
+					value.series = block;
+					value.index = 0;
+					value_type = RXT_BLOCK;
+					break;
+
+				default:
+					//printf ( "C: 9. buffer_type: other\n" );
+					//printf ( "C: 8.1. length: %d\n", *mbind->length );
+
+					s = RL_MAKE_STRING ( *mbind->length, 1 );
+
+					buffer_char = (char *) mbind->buffer;
+					*( buffer_char + *mbind->length ) = '\0';
+
+					if (
+						( ( field->type == MYSQL_TYPE_STRING ) || ( field->type == MYSQL_TYPE_VAR_STRING ) || ( field->type == MYSQL_TYPE_BLOB ) )
+						&&
+						( field->flags & BINARY_FLAG )
+					) {
+						for ( i = 0; i < *mbind->length; i++ ) RL_SET_CHAR ( s, i, buffer_char [ i ] );
+					} else {
+						string_utf8_to_rebol_unicode ( (uint8_t *) buffer_char, s );
+					}
+
+					value.series = s;
+					value.index = 0;
+					value_type = RXT_STRING;
+					break;
+			}
+
+		} else {
+			value.int64 = 0;
+			value_type = RXT_NONE;
+		}
+
+		RL_SET_VALUE ( rowblock, ( 2 * k ) + 1, value, value_type );
+	}
+
+	RXA_SERIES ( frm, 1 ) = rowblock;
+	RXA_INDEX ( frm, 1 ) = 0;
+	RXA_TYPE ( frm, 1 ) = RXT_BLOCK;
+	return RXR_VALUE;
+}
+// }}}
+
+/* {{{ R3MYSQL_free_prepared_stmt ( REBSER *database )
+
+Frees all resources associated with a query.
+
+Parameters:
+
+- database: database object.
+
+Returns nothing.
+*/
+void R3MYSQL_free_prepared_stmt ( REBSER *database ) {
+	RXIARG value;
+	char *sql = NULL;
+	MYSQL_STMT *mstmt = NULL;
+	MYSQL_BIND *mbind_arr = NULL;
+	MYSQL_BIND *mbind;
+	MYSQL_RES *result = NULL;
+	int arr_length = 0;
+	int i = 0;
+
+	RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-sql-string" ), &value );
+	sql = value.addr;
+	if ( sql ) free ( sql );
+
+	RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-statement" ), &value );
+	mstmt = value.addr;
+	if ( mstmt ) {
+		// This releases the result data if it has been stored locally
+		mysql_stmt_free_result ( mstmt );
+		mysql_stmt_close ( mstmt );
+	}
+
+	RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-params" ), &value );
+	mbind_arr = value.addr;
+
+	RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-params-length" ), &value );
+	arr_length = value.int64;
+
+	if ( mbind_arr ) {
+		for ( i = 0; i < arr_length; i++ ) {
+			mbind = &mbind_arr [ i ];
+			if ( mbind->buffer ) free ( mbind->buffer );
+			if ( mbind->length ) free ( mbind->length );
+			if ( mbind->is_null ) free ( mbind->is_null );
+			if ( mbind->error ) free ( mbind->error );
+		}
+
+		free ( mbind_arr );
+	}
+
+	RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-result" ), &value );
+	mbind_arr = value.addr;
+	RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-result-length" ), &value );
+	arr_length = value.int64;
+
+	if ( mbind_arr ) {
+		for ( i = 0; i < arr_length; i++ ) {
+			mbind = &mbind_arr [ i ];
+			if ( mbind->buffer ) free ( mbind->buffer );
+			if ( mbind->length ) free ( mbind->length );
+			if ( mbind->is_null ) free ( mbind->is_null );
+			if ( mbind->error ) free ( mbind->error );
+		}
+
+		free ( mbind_arr );
+	}
+
+	// This frees the result metadata
+	RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), &value );
+	result = value.addr;
+	if ( result ) mysql_free_result ( result );
+
+	value.int64 = 0;
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-sql-string" ), value, RXT_NONE );
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-statement" ), value, RXT_NONE );
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-params" ), value, RXT_NONE );
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-params-length" ), value, RXT_INTEGER );
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-result" ), value, RXT_NONE );
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-result-length" ), value, RXT_INTEGER );
+	RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-result" ), value, RXT_NONE );
+}
+// }}}
 
