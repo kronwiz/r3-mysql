@@ -27,7 +27,7 @@ RXIEXT int R3MYSQL_fetch_row ( RXIFRM *frm );
 RXIEXT int R3MYSQL_set_autocommit ( RXIFRM *frm );
 RXIEXT int R3MYSQL_execute_prepared_stmt ( RXIFRM *frm );
 RXIEXT int R3MYSQL_fetch_row_prepared_stmt ( RXIFRM *frm );
-void R3MYSQL_build_bind_from_param ( MYSQL_BIND mbind, int dtype, RXIARG value );
+MYSQL_BIND *R3MYSQL_build_bind_from_param ( REBSER *params, int params_length );
 MYSQL_BIND *R3MYSQL_build_bind_for_result ( MYSQL_RES *result, i64 num_cols, REBSER *field_convert_list );
 void R3MYSQL_free_prepared_stmt ( REBSER *database );
 
@@ -553,14 +553,11 @@ RXIEXT int R3MYSQL_execute_prepared_stmt ( RXIFRM *frm ) {
 	MYSQL_RES *result = NULL;
 	MYSQL_STMT *mstmt = NULL;
 	MYSQL_BIND *mbind_arr = NULL;
-	MYSQL_BIND mbind;
 	int res = 0;
-	int dtype = 0;
 	int params_length = 0;
 	RXIARG value;
 	RXIARG r_num_fields;
 	RXIARG r_num_rows;
-	int i = 0;
 	char *sql = NULL;
 	int sqllength = 0;  // sql statement length if it's a standard string (Rebol returns a negative value)
 	int utf8string_length = 0;  // length of the UTF8 buffer to allocate
@@ -606,18 +603,12 @@ RXIEXT int R3MYSQL_execute_prepared_stmt ( RXIFRM *frm ) {
 	// *** bind and fill the parameters ***
 
 	if ( params_length > 0 ) {
-		mbind_arr = malloc ( params_length * sizeof ( MYSQL_BIND ) );
-		memset ( mbind_arr, 0, params_length * sizeof ( MYSQL_BIND ) );
+		mbind_arr = R3MYSQL_build_bind_from_param ( params, params_length );
+
 		value.addr = mbind_arr;
 		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-params" ), value, RXT_HANDLE );
 		value.int64 = params_length;
 		RL_SET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-params-length" ), value, RXT_INTEGER );
-
-		for ( i = 0; i < params_length; i++ ) {
-			mbind = mbind_arr [ i ];
-			dtype = RL_GET_VALUE ( params, i, &value );
-			R3MYSQL_build_bind_from_param ( mbind, dtype, value );
-		}
 
 		if ( mysql_stmt_bind_param ( mstmt, mbind_arr ) != 0 )
 			return MAKE_ERROR ( mysql_error ( conn ) );
@@ -827,50 +818,103 @@ MYSQL_BIND *R3MYSQL_build_bind_for_result ( MYSQL_RES *result, i64 num_cols, REB
 // }}}
 
 // {{{ R3MYSQL_build_bind_from_param ( MYSQL_BIND mbind, int dtype, RXIARG value )
-void R3MYSQL_build_bind_from_param ( MYSQL_BIND mbind, int dtype, RXIARG value ) {
+MYSQL_BIND *R3MYSQL_build_bind_from_param ( REBSER *params, int params_length ) {
 	REBSER block;
+	RXIARG value;
+	MYSQL_BIND *mbind_arr = NULL;
+	MYSQL_BIND *mbind = NULL;
+	//MYSQL_FIELD *field = NULL;
 	char *strvalue = NULL;
 	int strval_len = 0;
+	char *buffer = NULL;
+	int buffer_length = 0;
+	int i = 0;
+	int dtype = 0;
 
-	switch ( dtype ) {
-		case RXT_BLOCK:
-			block = value.series;  // save for later use
-			RL_GET_VALUE ( block, 0, &value );
-			RL_GET_STRING ( value.series, 0, (void **) &strvalue );
-			printf ( "C: block of type: %s\n", strvalue );
-			break;
+	mbind_arr = malloc ( params_length * sizeof ( MYSQL_BIND ) );
+	memset ( mbind_arr, 0, params_length * sizeof ( MYSQL_BIND ) );
 
-		case RXT_STRING:
-			// TODO: should I encode the string in UTF8? How do I know if it's binary data?
-			RL_GET_STRING ( value.series, 0, (void **) &strvalue );
-			strval_len = RXI_SERIES_INFO ( value.series, RXI_SER_WIDE );
-			printf ( "C: %s\n", strvalue );
-			mbind.buffer_type = MYSQL_TYPE_STRING;
-			mbind.buffer = malloc ( strval_len );
-			memset ( mbind.buffer, 0, strval_len );
-			mbind.buffer_length = strval_len;
-			mbind.length = malloc ( sizeof ( unsigned long ) );
-			*(mbind.length) = strval_len;
-			memcpy ( mbind.buffer, strvalue, strval_len );
-			break;
+	for ( i = 0; i < params_length; i++ ) {
+		mbind = &mbind_arr [ i ];
+		mbind->length = malloc ( sizeof ( unsigned long ) );
+		mbind->is_null = malloc ( sizeof ( my_bool ) );
+		memset ( (void *) mbind->is_null, 0, sizeof ( my_bool ) );
+		mbind->error = malloc ( sizeof ( my_bool ) );
+		memset ( (void *) mbind->error, 0, sizeof ( my_bool ) );
 
-		case RXT_INTEGER:
-			printf ( "C: %d\n", (int) value.int64 );
-			mbind.buffer_type = MYSQL_TYPE_LONGLONG;
-			mbind.buffer = malloc ( sizeof ( i64 ) );
-			memset ( mbind.buffer, 0, sizeof ( i64 ) );
-			mbind.buffer_length = sizeof ( i64 );
-			mbind.is_unsigned = (my_bool) 0;
-			memcpy ( mbind.buffer, &value.int64, sizeof ( i64 ) );
-			break;
+		dtype = RL_GET_VALUE ( params, i, &value );
+		//printf ( "C: dtype: %d\n", (int) dtype );
 
-		case RXT_NONE:
-			printf ( "C: none\n" );
-			break;
+		switch ( dtype ) {
+			case RXT_BLOCK:
+				block = value.series;  // save for later use
+				RL_GET_VALUE ( block, 0, &value );
+				RL_GET_STRING ( value.series, 0, (void **) &strvalue );
+				printf ( "C: block of type: %s\n", strvalue );
+				break;
 
-		default:
-			printf ( "C: unknown type\n" );
+			case RXT_STRING:
+				strval_len = RL_GET_STRING ( value.series, 0, (void **) &strvalue );
+				// we have to encode the string in UTF8 before sending it to the database
+				strval_len = strval_len > 0 ? strval_len : -1 * strval_len;
+				buffer_length = ( strval_len * 3 ) + 1;  // the +1 is for the trailing \0
+				buffer = malloc ( buffer_length );
+				memset ( buffer, 0, buffer_length );
+				strval_len = string_rebol_unicode_to_utf8 ( buffer, buffer_length, value.series );
+
+				mbind->buffer_type = MYSQL_TYPE_STRING;
+				mbind->buffer = buffer;
+				mbind->buffer_length = buffer_length;
+				*(mbind->length) = strval_len;
+				break;
+
+			case RXT_BINARY:
+				// binary is like a string but without encoding
+				strval_len = RL_GET_STRING ( value.series, 0, (void **) &strvalue );
+				strval_len = strval_len > 0 ? strval_len : -1 * strval_len;
+				buffer_length = strval_len;
+				buffer = malloc ( buffer_length );
+				memset ( buffer, 0, buffer_length );
+				memcpy ( buffer, strvalue, strval_len );
+
+				mbind->buffer_type = MYSQL_TYPE_STRING;
+				mbind->buffer = buffer;
+				mbind->buffer_length = buffer_length;
+				*(mbind->length) = strval_len;
+				break;
+
+			case RXT_INTEGER:
+				mbind->buffer_type = MYSQL_TYPE_LONGLONG;
+				mbind->buffer = malloc ( sizeof ( long long int ) );
+				memset ( mbind->buffer, 0, sizeof ( long long int ) );
+				mbind->buffer_length = sizeof ( long long int );
+				mbind->is_unsigned = (my_bool) 0;
+				*(mbind->length) = sizeof ( long long int );
+				memcpy ( mbind->buffer, &value.int64, sizeof ( long long int ) );
+				break;
+
+			case RXT_DECIMAL:
+				mbind->buffer_type = MYSQL_TYPE_DOUBLE;
+				mbind->buffer = malloc ( sizeof ( double ) );
+				memset ( mbind->buffer, 0, sizeof ( double ) );
+				mbind->buffer_length = sizeof ( double );
+				mbind->is_unsigned = (my_bool) 0;
+				*(mbind->length) = sizeof ( double );
+				memcpy ( mbind->buffer, &value.dec64, sizeof ( double ) );
+				break;
+
+			case RXT_WORD:
+				// the word "none" is passed as a generic RXT_WORD
+				*(mbind->is_null) = 1;
+				break;
+
+			default:
+				printf ( "C: unknown type\n" );
+				*(mbind->is_null) = 1;
+		}
 	}
+
+	return mbind_arr;
 }
 // }}}
 
@@ -1155,7 +1199,6 @@ void R3MYSQL_free_prepared_stmt ( REBSER *database ) {
 
 	RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-params" ), &value );
 	mbind_arr = value.addr;
-
 	RL_GET_FIELD ( database, RL_MAP_WORD ( (REBYTE *) "int-bind-params-length" ), &value );
 	arr_length = value.int64;
 

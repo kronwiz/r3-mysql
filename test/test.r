@@ -83,12 +83,20 @@ either error? res: try [ db/execute "insert into addressbook values( NULL, 'àè
 	print [ "Affected rows:" db/num-rows ]
 ]
 
-print "^/* Execute: delete from addressbook"
-either error? res: try [ db/execute "delete from addressbook where firstname = 'First' or lastname = 'Unicode'" ] [
+print "^/* Execute: insert into addressbook with params"
+either error? res: try [ db/execute/params "insert into addressbook values( ?, 'First', 'Last', '333.123.444', ?, 'non so', ?, 'Italy', now(), date( now() ), time( now() ), ?, '23.16432' )" [ none "via di qua" 4563 5634.333 ] ] [
 	print res
 ] [
 	print [ "Affected rows:" db/num-rows ]
+	print [ "last-insert-id:" db/last-insert-id ]
 ]
+
+;print "^/* Execute: delete from addressbook"
+;either error? res: try [ db/execute "delete from addressbook where firstname = 'First' or lastname = 'Unicode'" ] [
+	;print res
+;] [
+	;print [ "Affected rows:" db/num-rows ]
+;]
 
 print "^/* Execute: select * from images"
 either error? res: try [ db/execute "select * from images" ] [
