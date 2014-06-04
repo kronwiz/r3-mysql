@@ -84,7 +84,7 @@ either error? res: try [ db/execute "insert into addressbook values( NULL, 'àè
 ]
 
 print "^/* Execute: insert into addressbook with params"
-either error? res: try [ db/execute/params "insert into addressbook values( ?, 'First', 'Last', '333.123.444', ?, 'non so', ?, 'Italy', now(), date( now() ), time( now() ), ?, '23.16432' )" [ none "via di qua" 4563 5634.333 ] ] [
+either error? res: try [ db/execute/params "insert into addressbook values( ?, 'First', 'Last', '333.123.444', ?, 'non so', ?, 'Italy', ?, ?, ?, ?, '23.16432' )" [ none "via di qua" 4563 23-Jan-2012/13:55 23-Jan-2012 13:55 5634.333 ] ] [
 	print res
 ] [
 	print [ "Affected rows:" db/num-rows ]

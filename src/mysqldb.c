@@ -830,6 +830,11 @@ MYSQL_BIND *R3MYSQL_build_bind_from_param ( REBSER *params, int params_length ) 
 	int buffer_length = 0;
 	int i = 0;
 	int dtype = 0;
+	u32 block_type = 0;
+	u32 block_type_date = 0;
+	u32 block_type_datetime = 0;
+	u32 block_type_time = 0;
+	MYSQL_TIME *buffer_time = NULL;
 
 	mbind_arr = malloc ( params_length * sizeof ( MYSQL_BIND ) );
 	memset ( mbind_arr, 0, params_length * sizeof ( MYSQL_BIND ) );
@@ -849,8 +854,65 @@ MYSQL_BIND *R3MYSQL_build_bind_from_param ( REBSER *params, int params_length ) 
 			case RXT_BLOCK:
 				block = value.series;  // save for later use
 				RL_GET_VALUE ( block, 0, &value );
-				RL_GET_STRING ( value.series, 0, (void **) &strvalue );
-				printf ( "C: block of type: %s\n", strvalue );
+				block_type = value.int32a;
+				/*RL_GET_STRING ( value.series, 0, (void **) &strvalue );
+				printf ( "C: block of type: %s\n", strvalue );*/
+
+				block_type_date = RL_MAP_WORD ( (REBYTE *) "date" );
+				block_type_datetime = RL_MAP_WORD ( (REBYTE *) "datetime" );
+				block_type_time = RL_MAP_WORD ( (REBYTE *) "time" );
+
+				if (
+					block_type == block_type_date ||
+					block_type == block_type_datetime ||
+					block_type == block_type_time
+				) {
+					mbind->buffer = malloc ( sizeof ( MYSQL_TIME ) );
+					memset ( mbind->buffer, 0, sizeof ( MYSQL_TIME ) );
+					mbind->buffer_length = sizeof ( MYSQL_TIME );
+					*(mbind->length) = sizeof ( MYSQL_TIME );
+				}
+
+				if ( block_type == block_type_date ) {
+					mbind->buffer_type = MYSQL_TYPE_DATE;
+					buffer_time = (MYSQL_TIME *) mbind->buffer;
+					RL_GET_VALUE ( block, 1, &value );
+					buffer_time->day = value.int64;
+					RL_GET_VALUE ( block, 2, &value );
+					buffer_time->month = value.int64;
+					RL_GET_VALUE ( block, 3, &value );
+					buffer_time->year = value.int64;
+
+				} else if ( block_type == block_type_datetime ) {
+
+					mbind->buffer_type = MYSQL_TYPE_DATETIME;
+					buffer_time = (MYSQL_TIME *) mbind->buffer;
+					RL_GET_VALUE ( block, 1, &value );
+					buffer_time->day = value.int64;
+					RL_GET_VALUE ( block, 2, &value );
+					buffer_time->month = value.int64;
+					RL_GET_VALUE ( block, 3, &value );
+					buffer_time->year = value.int64;
+					RL_GET_VALUE ( block, 4, &value );
+					buffer_time->hour = value.int64;
+					RL_GET_VALUE ( block, 5, &value );
+					buffer_time->minute = value.int64;
+					RL_GET_VALUE ( block, 6, &value );
+					buffer_time->second = value.int64;
+
+				} else if ( block_type == block_type_time ) {
+
+					mbind->buffer_type = MYSQL_TYPE_TIME;
+					buffer_time = (MYSQL_TIME *) mbind->buffer;
+					RL_GET_VALUE ( block, 1, &value );
+					buffer_time->hour = value.int64;
+					RL_GET_VALUE ( block, 2, &value );
+					buffer_time->minute = value.int64;
+					RL_GET_VALUE ( block, 3, &value );
+					buffer_time->second = value.int64;
+
+				}
+
 				break;
 
 			case RXT_STRING:
@@ -955,9 +1017,9 @@ RXIEXT int R3MYSQL_fetch_row_prepared_stmt ( RXIFRM *frm ) {
 	REBSER *s = NULL;
 	unsigned int i = 0;
 
-	char DATETIME_STRING[] = "datetime";
-	char TIME_STRING[] = "time";
-	char DATE_STRING[] = "date";
+	//char DATETIME_STRING[] = "datetime";
+	//char TIME_STRING[] = "time";
+	//char DATE_STRING[] = "date";
 	char *buffer_char = NULL;
 	long long int *buffer_int = NULL;
 	MYSQL_TIME *buffer_time = NULL;
@@ -1056,11 +1118,13 @@ RXIEXT int R3MYSQL_fetch_row_prepared_stmt ( RXIFRM *frm ) {
 				case MYSQL_TYPE_DATE:
 					buffer_time = (MYSQL_TIME *) mbind->buffer;
 					block = RL_MAKE_BLOCK ( 4 );
-					s = RL_MAKE_STRING ( 4, 0 );
+					/*s = RL_MAKE_STRING ( 4, 0 );
 					for ( i = 0; i < 4; i++ ) RL_SET_CHAR ( s, i, DATE_STRING [ i ] );
 					value.series = s;
 					value.index = 0;
-					RL_SET_VALUE ( block, 0, value, RXT_STRING );
+					RL_SET_VALUE ( block, 0, value, RXT_STRING );*/
+					value.int32a = RL_MAP_WORD ( (REBYTE *) "date" );
+					RL_SET_VALUE ( block, 0, value, RXT_WORD );
 
 					value.int64 = buffer_time->day;
 					RL_SET_VALUE ( block, 1, value, RXT_INTEGER );
@@ -1077,11 +1141,13 @@ RXIEXT int R3MYSQL_fetch_row_prepared_stmt ( RXIFRM *frm ) {
 				case MYSQL_TYPE_TIME:
 					buffer_time = (MYSQL_TIME *) mbind->buffer;
 					block = RL_MAKE_BLOCK ( 4 );
-					s = RL_MAKE_STRING ( 4, 0 );
+					/*s = RL_MAKE_STRING ( 4, 0 );
 					for ( i = 0; i < 4; i++ ) RL_SET_CHAR ( s, i, TIME_STRING [ i ] );
 					value.series = s;
 					value.index = 0;
-					RL_SET_VALUE ( block, 0, value, RXT_STRING );
+					RL_SET_VALUE ( block, 0, value, RXT_STRING );*/
+					value.int32a = RL_MAP_WORD ( (REBYTE *) "time" );
+					RL_SET_VALUE ( block, 0, value, RXT_WORD );
 
 					value.int64 = buffer_time->hour;
 					RL_SET_VALUE ( block, 1, value, RXT_INTEGER );
@@ -1101,11 +1167,13 @@ RXIEXT int R3MYSQL_fetch_row_prepared_stmt ( RXIFRM *frm ) {
 
 					buffer_time = (MYSQL_TIME *) mbind->buffer;
 					block = RL_MAKE_BLOCK ( 7 );
-					s = RL_MAKE_STRING ( 8, 0 );
+					/*s = RL_MAKE_STRING ( 8, 0 );
 					for ( i = 0; i < 8; i++ ) RL_SET_CHAR ( s, i, DATETIME_STRING [ i ] );
 					value.series = s;
 					value.index = 0;
-					RL_SET_VALUE ( block, 0, value, RXT_STRING );
+					RL_SET_VALUE ( block, 0, value, RXT_STRING );*/
+					value.int32a = RL_MAP_WORD ( (REBYTE *) "datetime" );
+					RL_SET_VALUE ( block, 0, value, RXT_WORD );
 
 					value.int64 = buffer_time->day;
 					RL_SET_VALUE ( block, 1, value, RXT_INTEGER );
