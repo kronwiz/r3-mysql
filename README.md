@@ -114,7 +114,7 @@ If you insert a record into a table that contains an `AUTO_INCREMENT` column, yo
 
 ### Parameter queries
 
-The `db/execute` method has a `params` refinement that lets you pass values as parameters after the query string. For example:
+The `execute` method has a `params` refinement that lets you pass values as parameters after the query string. For example:
 
     db/execute/params "insert into addressbook values( ?, 'First', 'Last', '333.123.444', ?, 'non so', ?, 'Italy', ?, ?, ?, ?, '23.16432' )" [ none "via di qua" 4563 23-Jan-2012/13:55 23-Jan-2012 13:55 5634.333 ]
 
@@ -138,7 +138,7 @@ The conversion from Rebol datatypes to MySQL field types follows these rules:
 
 The difference between `string!` and `binary!` is that a string is always converted to UTF8 before sending it to the database, while the content of a binary buffer is left untouched.
 
-Note also that MySQL performs other conversions when writing to a field, so that a Rebol `integer!` value, for example, can be used for anyone of the integer field variants (actually you can use it also for a string field, but that forces MySQL to do more work because it has to convert the number to a string). The same goes for a `binary!` value: the client side uses a string buffer, but you can write it to a BLOB field because MySQL does the necessary conversion.
+Note also that MySQL performs other conversions when writing to a field, so that a Rebol `integer!` value, for example, can be used for anyone of the integer field variants (actually you can use it also for a string field, but that forces MySQL to do more work because it has to convert the number to a string).
 
 
 ### Other attributes and methods
