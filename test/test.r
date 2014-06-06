@@ -91,12 +91,12 @@ either error? res: try [ db/execute/params "insert into addressbook values( ?, '
 	print [ "last-insert-id:" db/last-insert-id ]
 ]
 
-;print "^/* Execute: delete from addressbook"
-;either error? res: try [ db/execute "delete from addressbook where firstname = 'First' or lastname = 'Unicode'" ] [
-	;print res
-;] [
-	;print [ "Affected rows:" db/num-rows ]
-;]
+print "^/* Execute: delete from addressbook"
+either error? res: try [ db/execute "delete from addressbook where firstname = 'First' or lastname = 'Unicode'" ] [
+	print res
+] [
+	print [ "Affected rows:" db/num-rows ]
+]
 
 print "^/* Execute: select * from images"
 either error? res: try [ db/execute "select * from images" ] [
@@ -111,6 +111,22 @@ row: db/fetch-row
 while [ row <> none ] [
 	probe row
 	row: db/fetch-row
+]
+
+print "^/* Execute: insert into images a binary field"
+value: to binary! "abcd^@ef gh"
+print [ "value ->" mold value ]
+either error? res: try [ db/execute/params "insert into images values( 'bar', ?, ? )" reduce [ value "àèéìòù€" ] ] [
+	print res
+] [
+	print [ "Affected rows:" db/num-rows ]
+]
+
+print "^/* Execute: delete from images"
+either error? res: try [ db/execute "delete from images where name = 'bar'" ] [
+	print res
+] [
+	print [ "Affected rows:" db/num-rows ]
 ]
 
 print "^/* Set autocommit = false"

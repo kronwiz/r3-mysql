@@ -98,7 +98,7 @@ database: object [
 
 		forall parm [
 			p: first parm
-			if find [ date! time! ] type?/word p [
+			if find [ date! time! binary! ] type?/word p [
 				append self/params-convert-list reduce [ index? parm p ]
 				parm/1: to-c-type p
 			]
@@ -172,6 +172,10 @@ to-c-type: function [
 		time! [
 			reduce [ 'time thing/hour thing/minute thing/second ]
 		]
+
+		binary! [
+			reduce [ 'binary to string! thing ]
+		]
 	] [
 		; default
 		thing
@@ -192,6 +196,8 @@ from-c-type: function [
 				t: to-time at thing 5
 				to-date append copy/part next thing 3 t
 			]
+
+			binary [ to binary! next thing ]
 		] [
 			; default
 			thing

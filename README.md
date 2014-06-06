@@ -82,6 +82,7 @@ The Rebol datatype of a field value depends on the field type in MySQL. The conv
 | DATETIME         | date! (with time part) |
 | TIMESTAMP        | date! (with time part) |
 | TIME             | time! |
+| BLOB             | binary! |
 | everything else  | string! |
 
 When a field is returned as a string it's converted to unicode except if it's marked by MySQL as binary in which case all its bytes are left untouched.
@@ -129,7 +130,7 @@ The conversion from Rebol datatypes to MySQL field types follows these rules:
 | date! (with time part)    | DATETIME, TIMESTAMP |
 | time!                     | TIME |
 | string!                   | TEXT, CHAR, VARCHAR |
-| binary!                   | TEXT, CHAR, VARCHAR |
+| binary!                   | BLOB, BINARY, VARBINARY |
 | integer!                  | TINYINY, SMALLINT, INT, BIGINT |
 | decimal!                  | DOUBLE, FLOAT |
 | none!                     | NULL |

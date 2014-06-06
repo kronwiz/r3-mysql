@@ -26,8 +26,9 @@ insert into addressbook values( NULL, 'àèéìòù€', 'B', '234', 'X', 'Y', '
 
 create table images (
 	name varchar( 100 ) not null,
-	data blob
+	data blob,
+	description text
 ) engine=InnoDB;
 
-insert into images values( 'foo', '23ljksdkj3isdfl23\0w32lkh' );
+insert into images values( 'foo', '23ljksdkj3isdfl23\0w32lkh', 'àèéìòù€' );
 
